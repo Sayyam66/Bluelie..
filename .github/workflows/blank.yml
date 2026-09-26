@@ -1,78 +1,74 @@
 
-name: CI/CD Pipeline for Bluelie App
+name: Build Bluelie Android
 
 on:
   push:
     branches:
       - main
       - master
-  pull_request:
-    branches:
-      - main
-      - master
+  workflow_dispatch:
 
 jobs:
-  # -------------------------------------------------------------
-  # Job 1: Backend Testing (Python / Pytest / Ruff)
-  # -------------------------------------------------------------
-  backend-tests:
-    name: Backend Tests & Linting
+  android-build:
+    name: Build Android App
     runs-on: ubuntu-latest
 
     defaults:
       run:
-        working-directory: Bluelie/app/backend
+        working-directory: frontend
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          node-version: 20
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
 
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pytest ruff
-
-      - name: Run Ruff Linter
-        run: |
-          ruff check .
-
-      - name: Run Pytest
-        run: |
-          pytest tests/
-
-  # -------------------------------------------------------------
-  # Job 2: Frontend Build & Verification (Expo / Node.js)
-  # -------------------------------------------------------------
-  frontend-build:
-    name: Frontend Build Check
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: Bluelie/app/frontend
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-python@v5
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
-          node-version: '20'
-          cache: 'yarn'
+          distribution: temurin
+          java-version: "17"
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Type Check (TypeScript)
-        run: yarn tsc --noEmit
+      - name: Install EAS CLI
+        run: npm install --global eas-cli
 
-      - name: Expo Web Build Verification
-        run: npx expo export --platform web
+      - name: Create EAS configuration
+        run: |
+          cat > eas.json <<'EOF'
+          {
+            "build": {
+              "preview": {
+                "distribution": "internal",
+                "android": {
+                  "buildType": "apk"
+                }
+              },
+              "production": {
+                "distribution": "store",
+                "android": {
+                  "buildType": "app-bundle"
+                }
+              }
+            }
+          }
+          EOF
+
+      - name: Build Android APK
+        if: github.event_name == 'workflow_dispatch'
+        run: eas build --platform android --profile preview --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build Android AAB
+        if: github.event_name == 'push'
+        run: eas build --platform android --profile production --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
