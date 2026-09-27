@@ -1,87 +1,102 @@
-name: Build Bluelie Android
+name: Build Bluelie Android AAB
 
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
 
 jobs:
   build-android:
-    name: Build Android APK
+    name: Build Android AAB
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: app/frontend
+
     steps:
+      # 1. GitHub repository checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Detect frontend directory
-        shell: bash
+      # 2. Verify correct project location
+      - name: Verify Expo project
         run: |
-          if [ -f "frontend/package.json" ]; then
-            echo "APP_DIR=frontend" >> "$GITHUB_ENV"
-          elif [ -f "app/frontend/package.json" ]; then
-            echo "APP_DIR=app/frontend" >> "$GITHUB_ENV"
-          elif [ -f "package.json" ] && [ -f "app.json" ]; then
-            echo "APP_DIR=." >> "$GITHUB_ENV"
-          else
-            echo "ERROR: Could not find the Expo frontend package.json"
-            find . -maxdepth 4 -name package.json -print
+          echo "Current directory:"
+          pwd
+
+          echo "Project files:"
+          ls -la
+
+          if [ ! -f package.json ]; then
+            echo "ERROR: package.json not found in app/frontend"
             exit 1
           fi
 
+          if [ ! -f app.json ] && [ ! -f app.config.js ] && [ ! -f app.config.ts ]; then
+            echo "ERROR: Expo configuration not found"
+            exit 1
+          fi
+
+      # 3. Node.js
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version: 22
 
+      # 4. Enable Yarn
       - name: Enable Corepack
         run: corepack enable
 
+      # 5. Install dependencies
       - name: Install dependencies
-        working-directory: ${{ env.APP_DIR }}
-        shell: bash
-        run: |
-          yarn install --no-immutable
+        run: yarn install
 
-      - name: Verify Expo project
-        working-directory: ${{ env.APP_DIR }}
-        shell: bash
-        run: |
-          test -f package.json
-          test -f app.json
-          node -e "const p=require('./package.json'); console.log('Expo version:', p.dependencies.expo)"
-          node -e "const a=require('./app.json'); console.log('Android package:', a.expo.android.package)"
-
+      # 6. Install EAS CLI
       - name: Install EAS CLI
-        run: npm install --global eas-cli@latest
+        run: npm install -g eas-cli
 
-      - name: Initialize EAS project if needed
-        working-directory: ${{ env.APP_DIR }}
-        run: eas project:init --non-interactive
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      # 7. Check Expo configuration
+      - name: Check Expo configuration
+        run: npx expo config --type public
 
-      - name: Create APK build profile
-        working-directory: ${{ env.APP_DIR }}
+      # 8. Check Android package name
+      - name: Verify Android package name
+        shell: bash
+        run: |
+          PACKAGE=$(node -e "
+            const fs=require('fs');
+            const a=JSON.parse(fs.readFileSync('app.json','utf8'));
+            console.log(a.expo?.android?.package || '');
+          ")
+
+          echo "Android package: $PACKAGE"
+
+          if [ "$PACKAGE" != "com.sayyamchordiya.bluelie" ]; then
+            echo "ERROR: Android package must be:"
+            echo "com.sayyamchordiya.bluelie"
+            exit 1
+          fi
+
+      # 9. Create production EAS configuration
+      - name: Create eas.json
         shell: bash
         run: |
           cat > eas.json <<'EOF'
           {
             "build": {
-              "preview": {
-                "distribution": "internal",
+              "production": {
+                "distribution": "store",
                 "android": {
-                  "buildType": "apk"
+                  "buildType": "app-bundle"
                 }
               }
             }
           }
           EOF
 
-      - name: Build Android APK
-        working-directory: ${{ env.APP_DIR }}
-        run: eas build --platform android --profile preview --non-interactive
+          cat eas.json
+
+      # 10. Build Google Play AAB
+      - name: Build Android AAB
+        run: eas build --platform android --profile production --non-interactive
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
